@@ -52,6 +52,9 @@ class Flomo2Notion:
             properties=properties,
         )
 
+        # 等待 Notion API 同步（避免竞态条件）
+        time.sleep(1)
+
         # 在page里面添加content
         self.uploader.uploadSingleFileContent(self.notion_helper.client, content_md, page['id'])
 
@@ -74,8 +77,13 @@ class Flomo2Notion:
         }
         page = self.notion_helper.client.pages.update(page_id=page_id, properties=properties)
 
+        # 等待 Notion API 同步（避免竞态条件）
+        time.sleep(0.5)
+
         # 先清空page的内容，再重新写入
         self.notion_helper.clear_page_content(page["id"])
+
+        time.sleep(0.5)
 
         self.uploader.uploadSingleFileContent(self.notion_helper.client, content_md, page['id'])
 
@@ -102,21 +110,32 @@ class Flomo2Notion:
             slug_map[notion_utils.get_rich_text_from_result(notion_memo, "slug")] = notion_memo.get("id")
 
         # 3. 轮询flomo的列表数据
+        success_count = 0
+        fail_count = 0
         for memo in memo_list:
-            # 3.1 判断memo的slug是否存在，不存在则写入
-            # 3.2 防止大批量更新，只更新更新时间为制定时间的数据（默认为7天）
-            if memo['slug'] in slug_map.keys():
-                # 是否全量更新，默认否
-                full_update = os.getenv("FULL_UPDATE", False)
-                interval_day = os.getenv("UPDATE_INTERVAL_DAY", 7)
-                if not full_update and not is_within_n_days(memo['updated_at'], interval_day):
-                    print("is_within_n_days slug:", memo['slug'])
-                    continue
+            try:
+                # 3.1 判断memo的slug是否存在，不存在则写入
+                # 3.2 防止大批量更新，只更新更新时间为制定时间的数据（默认为7天）
+                if memo['slug'] in slug_map.keys():
+                    # 是否全量更新，默认否
+                    full_update = os.getenv("FULL_UPDATE", False)
+                    interval_day = os.getenv("UPDATE_INTERVAL_DAY", 7)
+                    if not full_update and not is_within_n_days(memo['updated_at'], interval_day):
+                        print("is_within_n_days slug:", memo['slug'])
+                        continue
 
-                page_id = slug_map[memo['slug']]
-                self.update_memo(memo, page_id)
-            else:
-                self.insert_memo(memo)
+                    page_id = slug_map[memo['slug']]
+                    self.update_memo(memo, page_id)
+                else:
+                    self.insert_memo(memo)
+                success_count += 1
+            except Exception as e:
+                fail_count += 1
+                print(f"Error syncing memo {memo['slug']}: {e}")
+                # 继续处理下一个 memo，不中断整个同步
+                continue
+        
+        print(f"\n同步完成！成功: {success_count}, 失败: {fail_count}")
 
 
 if __name__ == "__main__":
